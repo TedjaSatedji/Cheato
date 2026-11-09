@@ -1,0 +1,5 @@
+selenium==4.35.0
+openai==3.24.0
+python-dotenv==1.1.1
+pypdf==6.15.0
+keyboard==0.13.5

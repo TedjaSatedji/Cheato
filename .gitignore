@@ -1,0 +1,11 @@
+# secrets
+.env
+env
+
+# python
+__pycache__/
+*.pyc
+
+# checks / screenshots
+chrome-overlay-check.png
+.openchamber/
