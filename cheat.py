@@ -191,12 +191,20 @@ CHROME_JS = r"""
       #spada-chrome .sc-tray img.sc-vol { height: 38px; }
       #spada-chrome .sc-tray img.sc-power { height: 34px; }
       #spada-chrome .sc-clock { text-align: center; line-height: 1.3; font-size: 13px; color: #6c6470; }
+      #spada-chrome .sc-batt { position: relative; width: 26px; height: 13px; border: 1.5px solid #555;
+        border-radius: 2px; display: flex; align-items: center; padding: 1px; }
+      #spada-chrome .sc-batt::after { content: ""; position: absolute; right: -4px; top: 3px;
+        width: 2.5px; height: 7px; background: #555; border-radius: 0 1px 1px 0; }
+      #spada-chrome .sc-batt i { display: block; height: 100%; width: 0%; background: #1a1a1a; }
+      #spada-chrome .sc-batt.low i { background: #d13438; }
+      #spada-chrome .sc-batt.charging i { background: #107c10; }
       #spada-chrome .sc-time { font-weight: 600; -webkit-text-stroke: 0.25px currentColor; }
     </style>
     ${top}
     <div class="sc-task">
       <span class="sc-appwrap"><img class="sc-app" src="__LOGO__" onerror="this.style.display='none'"></span>
       <div class="sc-tray">
+        <span class="sc-batt" style="display:none"><i></i></span>
         <img class="sc-vol" src="__VOLUME__" onerror="this.style.display='none'">
         <span class="sc-clock"><span class="sc-time"></span><br><span class="sc-date"></span></span>
         <img src="__POWER__" class="sc-power" onerror="this.style.display='none'">
@@ -223,6 +231,22 @@ CHROME_JS = r"""
       wrap.querySelector('.sc-doctitle').textContent = document.title;
     };
     tick(); setInterval(tick, 1000);
+    // Real battery level. getBattery() only exists on secure contexts (https /
+    // localhost) — a desktop has none, so the icon simply stays hidden there.
+    const battEl = wrap.querySelector('.sc-batt');
+    if (navigator.getBattery) {
+      navigator.getBattery().then((b) => {
+        const draw = () => {
+          const pct = Math.round(b.level * 100);
+          battEl.style.display = '';
+          battEl.className = 'sc-batt' + (b.charging ? ' charging' : pct <= 20 ? ' low' : '');
+          battEl.querySelector('i').style.width = pct + '%';
+          battEl.title = pct + '%' + (b.charging ? ' (charging)' : '');
+        };
+        draw();
+        ['levelchange', 'chargingchange'].forEach((e) => b.addEventListener(e, draw));
+      }).catch(() => {});
+    }
   };
   if (document.documentElement) init(); else document.addEventListener('DOMContentLoaded', init);
 })();
