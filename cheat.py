@@ -797,7 +797,6 @@ def run_console(client: OpenAI, materials: str, driver) -> None:
     print("Advancing pages and submitting are done by you, in the browser.")
 
     last_page = None
-    last_answered = None
 
     while True:
         try:
@@ -817,9 +816,8 @@ def run_console(client: OpenAI, materials: str, driver) -> None:
                 page_param = parse_qs(urlparse(driver.current_url).query).get("page", [""])[0]
                 label = f"Page {int(page_param) + 1}" if page_param.isdigit() else "Question"
                 print(f"\n{label}: {question[:150]}")
-                if AUTO_ANSWER and options and question != last_answered:
+                if AUTO_ANSWER and options:
                     if _answer_on_screen(client, materials, driver, question, options):
-                        last_answered = question
                         _advance_or_submit(driver)
             else:
                 print("\nNo question on this page — submit (or move on) in the browser when ready.")

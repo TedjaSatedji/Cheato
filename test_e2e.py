@@ -31,7 +31,8 @@ import cheat
 from mock_spada import PAGES as N_PAGES
 from mock_spada import QUESTIONS as MOCK_QUESTIONS
 
-n_questions = len(N_PAGES)
+n_pages = len(N_PAGES)  # pages driven in the browser (includes the duplicate)
+n_questions = len(MOCK_QUESTIONS)  # distinct questions the summary grades
 
 holder = {}
 _orig_build = cheat.build_driver
@@ -46,6 +47,9 @@ cheat.build_driver = build_and_hold
 pressed_at = [0.0]
 quit_flag = [False]
 
+seen_url = [None]
+
+
 def fake_key():
     if quit_flag[0]:
         return "q"
@@ -57,12 +61,18 @@ def fake_key():
     try:
         if not d.find_elements("css selector", ".qtext"):
             return None  # not on a question page
-        if d.execute_script("return !!document.querySelector('input[type=radio]:checked')"):
+        # Only trust "already answered" while still on the SAME url: right after
+        # Next, the url flips before the new DOM renders, and the old page's
+        # checked radio would otherwise block the next question forever.
+        if d.current_url == seen_url[0] and d.execute_script(
+            "return !!document.querySelector('input[type=radio]:checked')"
+        ):
             return None  # already picked this question — don't waste another call
     except Exception:
         return None  # page mid-navigation
     if time.time() - pressed_at[0] > 1.0:
         pressed_at[0] = time.time()
+        seen_url[0] = d.current_url
         return "a"
     return None
 
@@ -86,20 +96,29 @@ wait_for(lambda: holder.get("driver") is not None, 30, "Selenium driver")
 d = holder["driver"]
 
 def radio_checked():
-    return d.execute_script("return !!document.querySelector('input[type=radio]:checked')")
+    """A radio is checked on the CURRENT page — not a leftover from the last one."""
+    return d.execute_script(
+        "return !!document.querySelector('input[type=radio]:checked')"
+    )
 
-# each question on its own page: pick an answer, advance (Finish on the last)
-for i in range(n_questions):
-    wait_for(lambda: "attempt.php" in d.current_url and d.find_elements("css selector", ".qtext"),
-             60 if i == 0 else 20, f"question {i + 1} to appear")
-    wait_for(radio_checked, 90, f"answer pick on Q{i + 1}")
-    last = "finishattempt" if i == n_questions - 1 else "next"
+def on_page(i):
+    """True once page i is loaded and its own question is on screen."""
+    return lambda: (
+        "attempt.php" in d.current_url
+        and f"page={i}" in d.current_url
+        and bool(d.find_elements("css selector", ".qtext"))
+    )
+
+# each page gets the bot's answer, then advance (Finish on the last)
+for i in range(n_pages):
+    wait_for(on_page(i), 60 if i == 0 else 20, f"page {i + 1} to appear")
+    wait_for(radio_checked, 90, f"answer pick on page {i + 1}")
+    last = "finishattempt" if i == n_pages - 1 else "next"
     # AUTO_NEXT clicks Next; AUTO_SUBMIT clicks Finish — never click twice.
     script_drives = cheat.AUTO_NEXT if last == "next" else cheat.AUTO_SUBMIT
     if not script_drives:
         d.find_element("css selector", f'input[name="{last}"]').click()
-    if last == "next":
-        wait_for(lambda: f"page={i + 1}" in d.current_url, 20, f"question {i + 2} to appear")
+    # no wait here: the next iteration's on_page(i) already waits for page i+1
 wait_for(lambda: "summary.php" in d.current_url, 20, "summary page")
 if cheat.AUTO_SUBMIT:  # the script now submits on its own: Finish -> Submit all -> confirm
     wait_for(lambda: "review.php" in d.current_url, 40, "review page (submitted)")
@@ -110,7 +129,7 @@ assert not t.is_alive(), "console did not stop after 'q'"
 
 html = urllib.request.urlopen("http://127.0.0.1:8765/mod/quiz/summary.php").read().decode()
 correct = html.count("&#9989; correct")
-print(f"\nSummary check: {correct}/{n_questions} answers correct")
+print(f"\nSummary check: {correct}/{n_questions} questions correct across {n_pages} pages")
 assert correct == n_questions, "submitted answers did not all match:\n" + html
-print(f"E2E OK: login -> attempt start -> {n_questions} questions answered+picked -> submitted")
+print(f"E2E OK: login -> attempt start -> {n_pages} pages answered+picked -> submitted")
 
