@@ -76,8 +76,9 @@ def build_client() -> OpenAI:
         )
     # The official client already retries; a manual loop on top of it only stacked
     # the timeouts and never fired (no letter is ever found in an error).
-    return OpenAI(api_key=BYNARA_API_KEY, base_url=BASE_URL, timeout=60, max_retries=3)
-
+    # Generous per-request timeout: a slow connection should wait, not fail.
+    # Retries happen inside the client (max_retries), not here.
+    return OpenAI(api_key=BYNARA_API_KEY, base_url=BASE_URL, timeout=120, max_retries=3)
 
 def load_materials() -> str:
     """Read every .txt/.md/.pdf in the materials folder into one reference text."""
@@ -198,20 +199,25 @@ CHROME_JS = r"""
       #spada-chrome .sc-batt i { display: block; height: 100%; width: 0%; background: #1a1a1a; }
       #spada-chrome .sc-batt.low i { background: #d13438; }
       #spada-chrome .sc-batt.charging i { background: #107c10; }
+      /* placeholder until getBattery() resolves — keeps the tray from reflowing */
+      #spada-chrome .sc-batt.sc-batt-idle { opacity: .35; }
       #spada-chrome .sc-time { font-weight: 600; -webkit-text-stroke: 0.25px currentColor; }
     </style>
     ${top}
     <div class="sc-task">
       <span class="sc-appwrap"><img class="sc-app" src="__LOGO__" onerror="this.style.display='none'"></span>
       <div class="sc-tray">
-        <span class="sc-batt" style="display:none"><i></i></span>
+        <span class="sc-batt sc-batt-idle"><i></i></span>
         <img class="sc-vol" src="__VOLUME__" onerror="this.style.display='none'">
         <span class="sc-clock"><span class="sc-time"></span><br><span class="sc-date"></span></span>
         <img src="__POWER__" class="sc-power" onerror="this.style.display='none'">
       </div>
     </div>`;
     document.documentElement.appendChild(wrap);
-    if (!ownChrome) {
+    // Body may not exist yet on a slow connection — only <html> has parsed. Paint
+    // the chrome first and push the page down once the body actually arrives.
+    const shiftPage = () => {
+      if (ownChrome || !document.body) return;
       document.body.style.setProperty('padding-top', CHROME_H + 'px', 'important');
       // The site's own top bars are fixed/sticky at the viewport top — body padding
       // can't move those, so shift them below the fake chrome explicitly.
@@ -222,7 +228,9 @@ CHROME_JS = r"""
         if (r.top > 100 || r.height > 160) return;  // only actual top bars, not drawers/FABs
         el.style.setProperty('top', CHROME_H + 'px', 'important');
       });
-    }
+    };
+    if (document.body) shiftPage();
+    else document.addEventListener('DOMContentLoaded', shiftPage);
     const tick = () => {
       const d = new Date();
       wrap.querySelector('.sc-time').textContent =
@@ -231,21 +239,25 @@ CHROME_JS = r"""
       wrap.querySelector('.sc-doctitle').textContent = document.title;
     };
     tick(); setInterval(tick, 1000);
-    // Real battery level. getBattery() only exists on secure contexts (https /
-    // localhost) — a desktop has none, so the icon simply stays hidden there.
+    // Real battery level. The icon starts as a dimmed placeholder so the tray
+    // doesn't reflow when the value arrives. getBattery() is secure-context only
+    // (https / localhost); no battery or no API => the placeholder fades out.
     const battEl = wrap.querySelector('.sc-batt');
+    const hideBatt = () => { battEl.style.display = 'none'; };
     if (navigator.getBattery) {
       navigator.getBattery().then((b) => {
         const draw = () => {
+          if (typeof b.level !== 'number' || !b.level) return hideBatt();
           const pct = Math.round(b.level * 100);
-          battEl.style.display = '';
           battEl.className = 'sc-batt' + (b.charging ? ' charging' : pct <= 20 ? ' low' : '');
           battEl.querySelector('i').style.width = pct + '%';
           battEl.title = pct + '%' + (b.charging ? ' (charging)' : '');
         };
         draw();
         ['levelchange', 'chargingchange'].forEach((e) => b.addEventListener(e, draw));
-      }).catch(() => {});
+      }).catch(hideBatt);
+    } else {
+      hideBatt();
     }
   };
   if (document.documentElement) init(); else document.addEventListener('DOMContentLoaded', init);
@@ -306,7 +318,7 @@ def _first_visible(driver, selectors):
     return None
 
 
-def _wait_for_attempt_page(driver, timeout: int = 15) -> bool:
+def _wait_for_attempt_page(driver, timeout: int = 45) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if "attempt.php" in driver.current_url:
